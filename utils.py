@@ -32,7 +32,7 @@ from PIL import Image
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")# ← paste your key here
 
 # One frame extracted per this many seconds (1 = one frame/sec)
-FRAME_INTERVAL_SEC = 1
+FRAME_INTERVAL_SEC = 5
 
 # Hamming distance threshold: 0–64 (lower = stricter)
 # ≤10 is a strong match; ≤5 is near-identical
