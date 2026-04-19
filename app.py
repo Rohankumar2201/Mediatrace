@@ -21,7 +21,8 @@ app.secret_key = "mediatrace_secret_2024"
 # Config
 UPLOAD_FOLDER = "uploads"
 ALLOWED_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
-DB_PATH = "mediatrace.db"
+import tempfile
+DB_PATH = os.path.join(tempfile.gettempdir(), "mediatrace.db")
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
