@@ -54,47 +54,35 @@ ALERT_EMAIL = {
 # ---------------------------------------------------------------------------
 # Frame extraction + hashing
 # ---------------------------------------------------------------------------
-
 def extract_and_hash_frames(video_path: str, video_id: str, db_path: str) -> list:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video file: {video_path}")
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if not fps or fps <= 0:
-        fps = 25
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    duration_sec = total_frames / fps
 
-    frame_interval = max(1, int(fps * FRAME_INTERVAL_SEC))
+    # Pick 10 evenly spaced timestamps across the video
+    num_samples = min(10, int(duration_sec))
+    timestamps = [duration_sec * i / num_samples for i in range(num_samples)]
 
-    hashes       = []
-    frame_index  = 0
-    frame_number = 0
-
+    hashes = []
     conn = sqlite3.connect(db_path)
 
-    while True:
+    for i, ts in enumerate(timestamps):
+        cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000)
         ret, frame = cap.read()
         if not ret:
-            break
-
-        if frame_number >= MAX_FRAMES:
-            break
-
-        if frame_index % frame_interval == 0:
-            rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(rgb)
-            phash   = str(imagehash.phash(pil_img))
-            ts      = frame_index / fps
-
-            conn.execute(
-                "INSERT INTO fingerprints (video_id, frame_number, hash_value, timestamp) "
-                "VALUES (?, ?, ?, ?)",
-                (video_id, frame_number, phash, ts)
-            )
-            hashes.append((frame_number, phash))
-            frame_number += 1
-
-        frame_index += 1
+            continue
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb)
+        phash = str(imagehash.phash(pil_img))
+        conn.execute(
+            "INSERT INTO fingerprints (video_id, frame_number, hash_value, timestamp) VALUES (?, ?, ?, ?)",
+            (video_id, i, phash, ts)
+        )
+        hashes.append((i, phash))
 
     conn.commit()
     conn.close()
@@ -102,7 +90,6 @@ def extract_and_hash_frames(video_path: str, video_id: str, db_path: str) -> lis
 
     print(f"[MediaTrace] Extracted {len(hashes)} frames from '{video_id}'")
     return hashes
-
 
 # ---------------------------------------------------------------------------
 # YouTube thumbnail fetch
