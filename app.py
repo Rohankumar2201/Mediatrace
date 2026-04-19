@@ -172,7 +172,9 @@ def api_status():
 # Run
 # ---------------------------------------------------------------------------
 
+# This runs with both gunicorn and python app.py
+init_db()
+
 if __name__ == "__main__":
-    init_db()
     print("MediaTrace running at http://127.0.0.1:5000")
     app.run(debug=True)
