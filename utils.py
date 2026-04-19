@@ -32,10 +32,10 @@ load_dotenv()
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
 # Extract one frame every N seconds
-FRAME_INTERVAL_SEC = 10
+FRAME_INTERVAL_SEC = 30
 
 # Maximum number of frames to extract (keeps memory low on free hosting)
-MAX_FRAMES = 20
+MAX_FRAMES = 10
 
 # Hamming distance threshold: 0-64 (lower = stricter)
 SIMILARITY_THRESHOLD = 20
