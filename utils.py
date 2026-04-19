@@ -12,9 +12,6 @@ Handles:
 import io
 import os
 import sqlite3
-from dotenv import load_dotenv
-
-load_dotenv()
 import smtplib
 import urllib.request
 from datetime import datetime
@@ -24,27 +21,32 @@ import cv2
 import imagehash
 import requests
 from PIL import Image
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ---------------------------------------------------------------------------
-# ★  CONFIG — fill in your YouTube API key below, then save the file
+# CONFIG
 # ---------------------------------------------------------------------------
 
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")# ← paste your key here
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
-# One frame extracted per this many seconds (1 = one frame/sec)
-FRAME_INTERVAL_SEC = 5
+# Extract one frame every N seconds
+FRAME_INTERVAL_SEC = 10
 
-# Hamming distance threshold: 0–64 (lower = stricter)
-# ≤10 is a strong match; ≤5 is near-identical
+# Maximum number of frames to extract (keeps memory low on free hosting)
+MAX_FRAMES = 20
+
+# Hamming distance threshold: 0-64 (lower = stricter)
 SIMILARITY_THRESHOLD = 20
 
-# Optional email alerts — set "enabled": True and fill in credentials
+# Optional email alerts
 ALERT_EMAIL = {
     "enabled":   False,
     "smtp_host": "smtp.gmail.com",
     "smtp_port": 587,
     "sender":    "you@gmail.com",
-    "password":  "your_app_password",   # use a Gmail App Password, not your real password
+    "password":  "your_app_password",
     "recipient": "notify@example.com",
 }
 
@@ -54,20 +56,13 @@ ALERT_EMAIL = {
 # ---------------------------------------------------------------------------
 
 def extract_and_hash_frames(video_path: str, video_id: str, db_path: str) -> list:
-    """
-    Opens a video file, grabs one frame every FRAME_INTERVAL_SEC seconds,
-    computes a pHash for each, and stores it in SQLite.
-
-    Returns a list of (frame_number, hash_string) tuples.
-    Raises RuntimeError if the video cannot be opened.
-    """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video file: {video_path}")
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     if not fps or fps <= 0:
-        fps = 25  # safe fallback
+        fps = 25
 
     frame_interval = max(1, int(fps * FRAME_INTERVAL_SEC))
 
@@ -80,6 +75,9 @@ def extract_and_hash_frames(video_path: str, video_id: str, db_path: str) -> lis
     while True:
         ret, frame = cap.read()
         if not ret:
+            break
+
+        if frame_number >= MAX_FRAMES:
             break
 
         if frame_index % frame_interval == 0:
@@ -111,14 +109,7 @@ def extract_and_hash_frames(video_path: str, video_id: str, db_path: str) -> lis
 # ---------------------------------------------------------------------------
 
 def fetch_youtube_thumbnails(keyword: str, max_results: int = 10) -> list:
-    """
-    Searches YouTube Data API v3 for videos matching *keyword*.
-    Downloads the default thumbnail of each result and computes its pHash.
-
-    Returns a list of dicts:  { 'url': youtube_watch_url, 'thumb_hash': phash_str }
-    Returns []  when no API key is configured or the request fails.
-    """
-    if not YOUTUBE_API_KEY or YOUTUBE_API_KEY == "YOUR_YOUTUBE_API_KEY_HERE":
+    if not YOUTUBE_API_KEY:
         print("[MediaTrace] WARNING: No YouTube API key set. Returning empty results.")
         return []
 
@@ -157,7 +148,6 @@ def fetch_youtube_thumbnails(keyword: str, max_results: int = 10) -> list:
 
 
 def _hash_image_from_url(url: str):
-    """Download an image from *url* and return its pHash string, or None on failure."""
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
             img_data = response.read()
@@ -173,12 +163,6 @@ def _hash_image_from_url(url: str):
 # ---------------------------------------------------------------------------
 
 def compare_with_database(query_hash_str: str, db_path: str):
-    """
-    Compares *query_hash_str* against every hash stored in the fingerprints table.
-
-    Returns (similarity_score, video_id)  if best Hamming distance ≤ SIMILARITY_THRESHOLD.
-    Returns (None, None)                  if no match found.
-    """
     if not query_hash_str:
         return None, None
 
@@ -197,7 +181,7 @@ def compare_with_database(query_hash_str: str, db_path: str):
     for video_id, stored_hash_str in rows:
         try:
             stored_hash = imagehash.hex_to_hash(stored_hash_str)
-            distance    = query_hash - stored_hash   # imagehash overloads '-' for Hamming
+            distance    = query_hash - stored_hash
         except Exception:
             continue
 
@@ -217,7 +201,6 @@ def compare_with_database(query_hash_str: str, db_path: str):
 # ---------------------------------------------------------------------------
 
 def send_alert(video_id: str, youtube_url: str, score: float):
-    """Prints a console alert and optionally sends an email notification."""
     msg = (
         f"\n{'='*60}\n"
         f"  [ALERT] Potential unauthorized usage detected!\n"
@@ -234,7 +217,6 @@ def send_alert(video_id: str, youtube_url: str, score: float):
 
 
 def _send_email_alert(video_id: str, youtube_url: str, score: float):
-    """Send a plain-text email via SMTP."""
     cfg     = ALERT_EMAIL
     subject = f"[MediaTrace] Match found for '{video_id}'"
     body    = (
