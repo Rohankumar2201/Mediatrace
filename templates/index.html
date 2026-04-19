@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MediaTrace — Sports Media Protection</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <span class="logo-icon">⬡</span>
+      <span class="brand-name">MediaTrace</span>
+    </div>
+    <p class="tagline">Unauthorized sports media detection via content fingerprinting</p>
+  </header>
+
+  <!-- Flash messages -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-wrap">
+        {% for category, message in messages %}
+          <div class="flash flash--{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <!-- Main grid -->
+  <main class="grid">
+
+    <!-- LEFT: action panel -->
+    <section class="panel">
+
+      <!-- Upload -->
+      <div class="card">
+        <h2 class="card-title">
+          <span class="step">01</span> Upload Original Video
+        </h2>
+        <p class="card-desc">
+          Upload your licensed sports video. MediaTrace will extract frames
+          and generate perceptual fingerprints (pHash) stored in SQLite.
+        </p>
+        <form action="/upload" method="POST" enctype="multipart/form-data" class="form">
+          <label class="file-label">
+            <input type="file" name="video" accept="video/*" required />
+            <span>mp4 · avi · mov · mkv</span>
+          </label>
+          <button type="submit" class="btn btn--primary">Extract &amp; Store Fingerprints</button>
+        </form>
+      </div>
+
+      <!-- Scan -->
+      <div class="card">
+        <h2 class="card-title">
+          <span class="step">02</span> Scan YouTube
+        </h2>
+        <p class="card-desc">
+          Enter a keyword to search YouTube. Thumbnails are compared against
+          your stored fingerprints via Hamming distance.
+        </p>
+        <form action="/scan" method="POST" class="form">
+          <input
+            type="text"
+            name="keyword"
+            placeholder="e.g. cricket highlights 2024"
+            class="text-input"
+            required
+          />
+          <button type="submit" class="btn btn--secondary">Run Scan</button>
+        </form>
+      </div>
+
+      <!-- Indexed videos -->
+      <div class="card">
+        <h2 class="card-title">
+          <span class="step">03</span> Indexed Videos
+        </h2>
+        {% if videos %}
+          <ul class="video-list">
+            {% for v in videos %}
+              <li class="video-item">
+                <span class="vid-icon">▶</span>
+                <span class="vid-name">{{ v }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="empty">No videos indexed yet. Upload one above.</p>
+        {% endif %}
+      </div>
+
+    </section>
+
+    <!-- RIGHT: matches dashboard -->
+    <section class="panel">
+      <div class="card card--full">
+        <h2 class="card-title">
+          <span class="step step--alert">04</span> Detected Matches
+          {% if matches %}
+            <span class="badge">{{ matches|length }}</span>
+          {% endif %}
+        </h2>
+
+        {% if matches %}
+          <table class="match-table">
+            <thead>
+              <tr>
+                <th>Original Video</th>
+                <th>YouTube Source</th>
+                <th>Similarity</th>
+                <th>Detected At</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for m in matches %}
+              <tr>
+                <td class="vid-cell">{{ m[0] }}</td>
+                <td>
+                  <a href="{{ m[1] }}" target="_blank" rel="noopener" class="yt-link">
+                    ↗ View on YouTube
+                  </a>
+                </td>
+                <td>
+                  <div class="score-wrap">
+                    <div class="score-bar" style="width: {{ (m[2] * 100)|int }}%"></div>
+                    <span class="score-text">{{ "%.1f"|format(m[2] * 100) }}%</span>
+                  </div>
+                </td>
+                <td class="date-cell">{{ m[3] }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="empty-state">
+            <div class="empty-icon">◎</div>
+            <p>No matches detected yet.</p>
+            <p class="sub">Upload a video and run a YouTube scan to begin.</p>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer>
+    <span>MediaTrace MVP</span>
+    <span class="sep">·</span>
+    <span>pHash + Hamming distance</span>
+    <span class="sep">·</span>
+    <a href="/api/status" target="_blank">API Status</a>
+  </footer>
+
+</body>
+</html>

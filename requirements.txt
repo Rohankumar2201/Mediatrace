@@ -1,0 +1,7 @@
+flask>=2.3
+opencv-python>=4.8
+Pillow>=10.0
+imagehash>=4.3
+requests>=2.31
+werkzeug>=2.3
+numpy>=1.24
