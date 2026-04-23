@@ -5,8 +5,9 @@ Handles:
   - Frame extraction from video using OpenCV
   - Perceptual hashing (pHash) via PIL + imagehash
   - Hamming distance comparison for similarity detection
-  - YouTube Data API v3 thumbnail + storyboard fetching
+  - YouTube Data API v3 thumbnail fetching
   - Console / email alert when a match is found
+  - Gemini AI infringement report generation
 """
 
 import io
@@ -21,20 +22,21 @@ import cv2
 import imagehash
 import requests
 from PIL import Image
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # ---------------------------------------------------------------------------
-# CONFIG
+# ★  CONFIG — fill in your YouTube API key below, then save the file
 # ---------------------------------------------------------------------------
 
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "YOUR_YOUTUBE_API_KEY_HERE")
+GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "")
 
-FRAME_INTERVAL_SEC = 30
-MAX_FRAMES = 10
+# One frame extracted per this many seconds (1 = one frame/sec)
+FRAME_INTERVAL_SEC = 1
+
+# Hamming distance threshold: 0–64 (lower = stricter)
 SIMILARITY_THRESHOLD = 35
 
+# Optional email alerts
 ALERT_EMAIL = {
     "enabled":   False,
     "smtp_host": "smtp.gmail.com",
@@ -51,36 +53,48 @@ ALERT_EMAIL = {
 
 def extract_and_hash_frames(video_path: str, video_id: str, db_path: str) -> list:
     """
-    Opens a video, seeks to 10 evenly spaced timestamps,
-    hashes each frame and stores in SQLite.
+    Opens a video file, grabs one frame every FRAME_INTERVAL_SEC seconds,
+    computes a pHash for each, and stores it in SQLite.
+
+    Returns a list of (frame_number, hash_string) tuples.
+    Raises RuntimeError if the video cannot be opened.
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video file: {video_path}")
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25
-    duration_sec = total_frames / fps
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if not fps or fps <= 0:
+        fps = 25  # safe fallback
 
-    num_samples = min(MAX_FRAMES, max(1, int(duration_sec // FRAME_INTERVAL_SEC)))
-    timestamps = [duration_sec * i / num_samples for i in range(num_samples)]
+    frame_interval = max(1, int(fps * FRAME_INTERVAL_SEC))
 
-    hashes = []
+    hashes       = []
+    frame_index  = 0
+    frame_number = 0
+
     conn = sqlite3.connect(db_path)
 
-    for i, ts in enumerate(timestamps):
-        cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000)
+    while True:
         ret, frame = cap.read()
         if not ret:
-            continue
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb)
-        phash = str(imagehash.phash(pil_img))
-        conn.execute(
-            "INSERT INTO fingerprints (video_id, frame_number, hash_value, timestamp) VALUES (?, ?, ?, ?)",
-            (video_id, i, phash, ts)
-        )
-        hashes.append((i, phash))
+            break
+
+        if frame_index % frame_interval == 0:
+            rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb)
+            phash   = str(imagehash.phash(pil_img))
+            ts      = frame_index / fps
+
+            conn.execute(
+                "INSERT INTO fingerprints (video_id, frame_number, hash_value, timestamp) "
+                "VALUES (?, ?, ?, ?)",
+                (video_id, frame_number, phash, ts)
+            )
+            hashes.append((frame_number, phash))
+            frame_number += 1
+
+        frame_index += 1
 
     conn.commit()
     conn.close()
@@ -91,73 +105,23 @@ def extract_and_hash_frames(video_path: str, video_id: str, db_path: str) -> lis
 
 
 # ---------------------------------------------------------------------------
-# YouTube storyboard frame extraction
-# ---------------------------------------------------------------------------
-
-def _get_storyboard_hashes(video_id: str) -> list:
-    """
-    Downloads YouTube's storyboard sprite sheet for a video.
-    These are REAL video frames used for the scrubber preview.
-    Splits the sprite sheet into individual tiles and hashes each one.
-    Returns a list of pHash strings.
-    """
-    # YouTube storyboard URLs — L2 has larger tiles (160x90), L1 has smaller (120x68)
-    storyboard_urls = [
-        f"https://i.ytimg.com/sb/{video_id}/storyboard3_L2/M0.jpg",
-        f"https://i.ytimg.com/sb/{video_id}/storyboard3_L1/M0.jpg",
-    ]
-
-    for url in storyboard_urls:
-        try:
-            with urllib.request.urlopen(url, timeout=8) as response:
-                img_data = response.read()
-
-            sprite = Image.open(io.BytesIO(img_data)).convert("RGB")
-            w, h = sprite.size
-
-            # Tile dimensions per storyboard level
-            tile_w = 160 if "L2" in url else 120
-            tile_h = 90  if "L2" in url else 68
-
-            cols = w // tile_w
-            rows = h // tile_h
-
-            hashes = []
-            for row in range(rows):
-                for col in range(cols):
-                    left = col * tile_w
-                    top  = row * tile_h
-                    tile = sprite.crop((left, top, left + tile_w, top + tile_h))
-                    if tile.size[0] > 10 and tile.size[1] > 10:
-                        hashes.append(str(imagehash.phash(tile)))
-
-            if hashes:
-                print(f"[MediaTrace] Got {len(hashes)} storyboard frames for {video_id}")
-                return hashes
-
-        except Exception as e:
-            print(f"[MediaTrace] Storyboard fetch failed {url}: {e}")
-            continue
-
-    return []
-
-
-# ---------------------------------------------------------------------------
 # YouTube thumbnail fetch
 # ---------------------------------------------------------------------------
 
 def fetch_youtube_thumbnails(keyword: str, max_results: int = 10) -> list:
     """
-    Searches YouTube Data API v3 for videos matching keyword.
-    For each result, fetches BOTH storyboard frames (real video frames)
-    AND all thumbnail sizes, hashes each, and returns them all for comparison.
+    Searches YouTube Data API v3 for videos matching *keyword*.
+    Downloads the default thumbnail of each result and computes its pHash.
+
+    Returns a list of dicts:  { 'url': youtube_watch_url, 'thumb_hash': phash_str }
+    Returns []  when no API key is configured or the request fails.
     """
-    if not YOUTUBE_API_KEY:
-        print("[MediaTrace] WARNING: No YouTube API key set.")
+    if not YOUTUBE_API_KEY or YOUTUBE_API_KEY == "YOUR_YOUTUBE_API_KEY_HERE":
+        print("[MediaTrace] WARNING: No YouTube API key set. Returning empty results.")
         return []
 
     endpoint = "https://www.googleapis.com/youtube/v3/search"
-    params = {
+    params   = {
         "part":       "snippet",
         "q":          keyword,
         "type":       "video",
@@ -175,34 +139,23 @@ def fetch_youtube_thumbnails(keyword: str, max_results: int = 10) -> list:
 
     items = []
     for item in data.get("items", []):
-        vid_id = item["id"].get("videoId", "")
-        if not vid_id:
+        video_id = item["id"].get("videoId", "")
+        if not video_id:
             continue
 
-        youtube_url = f"https://www.youtube.com/watch?v={vid_id}"
+        youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+        thumb_url   = item["snippet"]["thumbnails"]["default"]["url"]
 
-        # 1. Try storyboard frames first — real video frames, best for matching
-        storyboard_hashes = _get_storyboard_hashes(vid_id)
-        for h in storyboard_hashes:
-            items.append({"url": youtube_url, "thumb_hash": h})
+        phash = _hash_image_from_url(thumb_url)
+        if phash:
+            items.append({"url": youtube_url, "thumb_hash": phash})
 
-        # 2. Also try all thumbnail sizes as fallback
-        thumbnails = item["snippet"]["thumbnails"]
-        for quality in ["maxres", "high", "medium", "default"]:
-            thumb_url = thumbnails.get(quality, {}).get("url")
-            if not thumb_url:
-                continue
-            phash = _hash_image_from_url(thumb_url)
-            if phash:
-                items.append({"url": youtube_url, "thumb_hash": phash})
-                break  # one thumbnail per video is enough
-
-    print(f"[MediaTrace] Total hashes to compare for '{keyword}': {len(items)}")
+    print(f"[MediaTrace] Fetched {len(items)} thumbnails for '{keyword}'")
     return items
 
 
 def _hash_image_from_url(url: str):
-    """Download an image from url and return its pHash string, or None on failure."""
+    """Download an image from *url* and return its pHash string, or None on failure."""
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
             img_data = response.read()
@@ -219,8 +172,10 @@ def _hash_image_from_url(url: str):
 
 def compare_with_database(query_hash_str: str, db_path: str):
     """
-    Compares query_hash_str against every stored fingerprint.
-    Returns (similarity_score, video_id) if match found, else (None, None).
+    Compares *query_hash_str* against every hash stored in the fingerprints table.
+
+    Returns (similarity_score, video_id)  if best Hamming distance ≤ SIMILARITY_THRESHOLD.
+    Returns (None, None)                  if no match found.
     """
     if not query_hash_str:
         return None, None
@@ -240,7 +195,7 @@ def compare_with_database(query_hash_str: str, db_path: str):
     for video_id, stored_hash_str in rows:
         try:
             stored_hash = imagehash.hex_to_hash(stored_hash_str)
-            distance = query_hash - stored_hash
+            distance    = query_hash - stored_hash
         except Exception:
             continue
 
@@ -256,10 +211,57 @@ def compare_with_database(query_hash_str: str, db_path: str):
 
 
 # ---------------------------------------------------------------------------
+# Gemini AI — Infringement Report
+# ---------------------------------------------------------------------------
+
+def generate_gemini_report(video_id: str, youtube_url: str, score: float) -> str:
+    """
+    Calls Google Gemini to generate a short infringement analysis for a detected match.
+
+    Returns a plain-text report string on success, or an empty string if the API
+    key is not configured or the call fails. Never raises — the scan must not break.
+    """
+    if not GEMINI_API_KEY:
+        print("[MediaTrace] GEMINI_API_KEY not set — skipping AI report.")
+        return ""
+
+    try:
+        import google.generativeai as genai
+
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        similarity_pct = round(score * 100, 1)
+        prompt = (
+            f"You are a digital rights analyst for a sports media company. "
+            f"MediaTrace, a perceptual fingerprinting system, has detected a potential "
+            f"unauthorized re-upload.\n\n"
+            f"Original asset ID : {video_id}\n"
+            f"Suspect YouTube URL: {youtube_url}\n"
+            f"Visual similarity  : {similarity_pct}% (via pHash Hamming distance)\n\n"
+            f"Write a concise 2-3 sentence infringement assessment that: "
+            f"(1) states the likelihood of unauthorized use based on the similarity score, "
+            f"(2) notes what action a rights holder should consider, "
+            f"(3) mentions that visual fingerprinting was used — not metadata or watermarks. "
+            f"Be professional and factual. Do not use bullet points."
+        )
+
+        response = model.generate_content(prompt)
+        report = response.text.strip()
+        print(f"[MediaTrace] Gemini report generated for {youtube_url}")
+        return report
+
+    except Exception as e:
+        print(f"[MediaTrace] Gemini report failed (non-fatal): {e}")
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Alert system
 # ---------------------------------------------------------------------------
 
 def send_alert(video_id: str, youtube_url: str, score: float):
+    """Prints a console alert and optionally sends an email notification."""
     msg = (
         f"\n{'='*60}\n"
         f"  [ALERT] Potential unauthorized usage detected!\n"
@@ -276,19 +278,20 @@ def send_alert(video_id: str, youtube_url: str, score: float):
 
 
 def _send_email_alert(video_id: str, youtube_url: str, score: float):
-    cfg = ALERT_EMAIL
+    """Send a plain-text email via SMTP."""
+    cfg     = ALERT_EMAIL
     subject = f"[MediaTrace] Match found for '{video_id}'"
-    body = (
+    body    = (
         f"Potential unauthorized usage detected.\n\n"
         f"Original video : {video_id}\n"
         f"YouTube URL    : {youtube_url}\n"
         f"Similarity     : {score * 100:.1f}%\n"
         f"Detected at    : {datetime.now()}\n"
     )
-    mime = MIMEText(body)
+    mime            = MIMEText(body)
     mime["Subject"] = subject
-    mime["From"] = cfg["sender"]
-    mime["To"] = cfg["recipient"]
+    mime["From"]    = cfg["sender"]
+    mime["To"]      = cfg["recipient"]
 
     try:
         server = smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"])

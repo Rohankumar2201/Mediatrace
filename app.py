@@ -13,20 +13,20 @@ from utils import (
     extract_and_hash_frames,
     fetch_youtube_thumbnails,
     compare_with_database,
-    send_alert
+    send_alert,
+    generate_gemini_report,
 )
 
 app = Flask(__name__)
 app.secret_key = "mediatrace_secret_2024"
 
 # Config
-UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), "uploads")
+UPLOAD_FOLDER = "/tmp/uploads"
 ALLOWED_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
 DB_PATH = os.path.join(tempfile.gettempdir(), "mediatrace.db")
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB max
 
 
 # ---------------------------------------------------------------------------
@@ -34,8 +34,10 @@ app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB max
 # ---------------------------------------------------------------------------
 
 def init_db():
+    """Create tables if they don't exist yet."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS fingerprints (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,15 +47,18 @@ def init_db():
             timestamp    REAL    NOT NULL
         )
     """)
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS matches (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             video_id         TEXT    NOT NULL,
             youtube_url      TEXT    NOT NULL,
             similarity_score REAL    NOT NULL,
-            detected_at      TEXT    NOT NULL
+            detected_at      TEXT    NOT NULL,
+            gemini_report    TEXT    DEFAULT ''
         )
     """)
+
     conn.commit()
     conn.close()
 
@@ -72,7 +77,7 @@ def get_all_video_ids():
 def get_all_matches():
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        "SELECT video_id, youtube_url, similarity_score, detected_at "
+        "SELECT video_id, youtube_url, similarity_score, detected_at, gemini_report "
         "FROM matches ORDER BY detected_at DESC"
     ).fetchall()
     conn.close()
@@ -137,11 +142,17 @@ def scan_youtube():
         score, matched_video = compare_with_database(item["thumb_hash"], DB_PATH)
         if matched_video:
             send_alert(matched_video, item["url"], score)
+
+            # ── Gemini AI infringement report ──────────────────────────
+            report = generate_gemini_report(matched_video, item["url"], score)
+            # ───────────────────────────────────────────────────────────
+
             conn = sqlite3.connect(DB_PATH)
             conn.execute(
-                "INSERT INTO matches (video_id, youtube_url, similarity_score, detected_at) "
-                "VALUES (?, ?, ?, datetime('now'))",
-                (matched_video, item["url"], round(score, 4))
+                "INSERT INTO matches "
+                "(video_id, youtube_url, similarity_score, detected_at, gemini_report) "
+                "VALUES (?, ?, ?, datetime('now'), ?)",
+                (matched_video, item["url"], round(score, 4), report)
             )
             conn.commit()
             conn.close()
@@ -155,27 +166,6 @@ def scan_youtube():
     return redirect(url_for("index"))
 
 
-@app.route("/demo", methods=["POST"])
-def load_demo():
-    conn = sqlite3.connect(DB_PATH)
-    demo_matches = [
-        ("icc_worldcup_2011_highlights", "https://www.youtube.com/watch?v=s6IOKT53bO8", 0.94, "2024-03-15 10:23:11"),
-        ("icc_worldcup_2011_highlights", "https://www.youtube.com/watch?v=KTnB4RRFc5o", 0.89, "2024-03-15 10:23:14"),
-        ("icc_worldcup_2011_highlights", "https://www.youtube.com/watch?v=FDMq9ie7cI0", 0.83, "2024-03-15 10:23:17"),
-        ("icc_worldcup_2011_highlights", "https://www.youtube.com/watch?v=vBiIDwBOqpA", 0.81, "2024-03-15 10:23:20"),
-        ("icc_worldcup_2011_highlights", "https://www.youtube.com/watch?v=mGPCCmgCCME", 0.76, "2024-03-15 10:23:23"),
-    ]
-    conn.execute("DELETE FROM matches")
-    for m in demo_matches:
-        conn.execute(
-            "INSERT INTO matches (video_id, youtube_url, similarity_score, detected_at) VALUES (?, ?, ?, ?)", m
-        )
-    conn.commit()
-    conn.close()
-    flash("Demo matches loaded! Showing 5 potential unauthorized uploads detected.", "success")
-    return redirect(url_for("index"))
-
-
 @app.route("/api/status")
 def api_status():
     videos  = get_all_video_ids()
@@ -183,7 +173,8 @@ def api_status():
     return jsonify({
         "indexed_videos": len(videos),
         "total_matches":  len(matches),
-        "status": "ok"
+        "status": "ok",
+        "gemini": "enabled" if os.environ.get("GEMINI_API_KEY") else "not configured",
     })
 
 
@@ -191,9 +182,7 @@ def api_status():
 # Run
 # ---------------------------------------------------------------------------
 
-with app.app_context():
-    init_db()
-
 if __name__ == "__main__":
+    init_db()
     print("MediaTrace running at http://127.0.0.1:5000")
     app.run(debug=True)

@@ -59,7 +59,8 @@
         </h2>
         <p class="card-desc">
           Enter a keyword to search YouTube. Thumbnails are compared against
-          your stored fingerprints via Hamming distance.
+          your stored fingerprints via Hamming distance. Matches are analysed
+          by <strong style="color:var(--accent)">Gemini AI</strong>.
         </p>
         <form action="/scan" method="POST" class="form">
           <input
@@ -131,6 +132,16 @@
                 </td>
                 <td class="date-cell">{{ m[3] }}</td>
               </tr>
+              {% if m[4] %}
+              <tr class="gemini-row">
+                <td colspan="4">
+                  <div class="gemini-report">
+                    <span class="gemini-label">✦ Gemini AI Analysis</span>
+                    <p class="gemini-text">{{ m[4] }}</p>
+                  </div>
+                </td>
+              </tr>
+              {% endif %}
               {% endfor %}
             </tbody>
           </table>
@@ -151,6 +162,8 @@
     <span>MediaTrace MVP</span>
     <span class="sep">·</span>
     <span>pHash + Hamming distance</span>
+    <span class="sep">·</span>
+    <span>Gemini AI reports</span>
     <span class="sep">·</span>
     <a href="/api/status" target="_blank">API Status</a>
   </footer>
