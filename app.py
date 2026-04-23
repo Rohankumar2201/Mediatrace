@@ -181,8 +181,8 @@ def api_status():
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
+init_db()              # ← must be OUTSIDE, at this level
 
 if __name__ == "__main__":
-    init_db()
     print("MediaTrace running at http://127.0.0.1:5000")
     app.run(debug=True)
