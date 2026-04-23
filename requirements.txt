@@ -6,3 +6,4 @@ requests>=2.31
 werkzeug>=2.3
 numpy>=1.24
 google-generativeai>=0.8
+gunicorn>=21.2
