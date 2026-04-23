@@ -30,8 +30,8 @@ from PIL import Image
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "YOUR_YOUTUBE_API_KEY_HERE")
 GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "")
 
-# One frame extracted per this many seconds (1 = one frame/sec)
-FRAME_INTERVAL_SEC = 1
+FRAME_INTERVAL_SEC = 30   # one frame every 30 seconds
+MAX_FRAMES = 15           # hard cap — stop after 15 frames no matter what
 
 # Hamming distance threshold: 0–64 (lower = stricter)
 SIMILARITY_THRESHOLD = 35
@@ -78,6 +78,8 @@ def extract_and_hash_frames(video_path: str, video_id: str, db_path: str) -> lis
     while True:
         ret, frame = cap.read()
         if not ret:
+            break
+        if frame_number >= MAX_FRAMES:
             break
 
         if frame_index % frame_interval == 0:
