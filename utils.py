@@ -218,7 +218,7 @@ def generate_gemini_report(video_id: str, youtube_url: str, score: float) -> str
         import google.generativeai as genai
 
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
 
         similarity_pct = round(score * 100, 1)
         prompt = (
@@ -235,7 +235,10 @@ def generate_gemini_report(video_id: str, youtube_url: str, score: float) -> str
             f"Be professional and factual. Do not use bullet points."
         )
 
-        response = model.generate_content(prompt)
+        response = model.generate_content(
+            prompt,
+            request_options={"timeout": 10}
+        )
         report = response.text.strip()
         print(f"[MediaTrace] Gemini report generated for {youtube_url}")
         return report
